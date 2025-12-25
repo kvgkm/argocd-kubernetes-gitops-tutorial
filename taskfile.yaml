@@ -1,0 +1,104 @@
+version: '3'
+
+vars:
+  CLUSTER_NAME: argocd-local
+  ARGOCD_NAMESPACE: argocd
+  ARGOCD_VERSION: 7.7.0
+  KIND_VERSION: v1.27.3
+
+tasks:
+
+  create-cluster:
+    desc: Create KIND cluster with ingress support
+    cmds:
+      - |
+        cat <<EOF | kind create cluster --name {{.CLUSTER_NAME}} --config=-
+        kind: Cluster
+        apiVersion: kind.x-k8s.io/v1alpha4
+        nodes:
+        - role: control-plane
+          kubeadmConfigPatches:
+          - |
+            kind: InitConfiguration
+            nodeRegistration:
+              kubeletExtraArgs:
+                node-labels: "ingress-ready=true"
+          extraPortMappings:
+          - containerPort: 80
+            hostPort: 80
+            protocol: TCP
+          - containerPort: 443
+            hostPort: 443
+            protocol: TCP
+        EOF
+      - kubectl cluster-info --context kind-{{.CLUSTER_NAME}}
+    status:
+      - kind get clusters | grep -q {{.CLUSTER_NAME}}
+
+  install-ingress:
+    desc: Install nginx ingress controller
+    deps: [create-cluster]
+    cmds:
+      - kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+      - sleep 10
+      - kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=120s
+    status:
+      - kubectl get namespace ingress-nginx &> /dev/null
+
+  install-argocd:
+    desc: Install ArgoCD via Helm
+    deps: [create-cluster]
+    cmds:
+      - helm repo add argo https://argoproj.github.io/argo-helm
+      - helm repo update
+      - kubectl create namespace {{.ARGOCD_NAMESPACE}} --dry-run=client -o yaml | kubectl apply -f -
+      - helm upgrade --install argocd argo/argo-cd --namespace {{.ARGOCD_NAMESPACE}} --version {{.ARGOCD_VERSION}} --wait
+      - kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n {{.ARGOCD_NAMESPACE}} --timeout=300s
+    status:
+      - helm list -n {{.ARGOCD_NAMESPACE}} | grep -q argocd
+
+  get-password:
+    desc: Get ArgoCD admin password
+    cmds:
+      - kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
+
+  port-forward:
+    desc: Port-forward ArgoCD server to localhost:8080
+    cmds:
+      - echo "ArgoCD UI available at https://localhost:8080"
+      - echo "Username -> admin"
+      - echo "Password -> $(kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)"
+      - kubectl port-forward svc/argocd-server -n {{.ARGOCD_NAMESPACE}} 8080:443
+
+  deploy-all:
+    desc: Complete setup - cluster, ingress, and ArgoCD
+    cmds:
+      - task: create-cluster
+      - task: install-ingress
+      - task: install-argocd
+      - echo "Setup complete! Run 'task port-forward' to access ArgoCD UI"
+
+  status:
+    desc: Check cluster and ArgoCD status
+    cmds:
+      - echo "=== Cluster Status ==="
+      - kubectl cluster-info --context kind-{{.CLUSTER_NAME}}
+      - echo ""
+      - echo "=== ArgoCD Pods ==="
+      - kubectl get pods -n {{.ARGOCD_NAMESPACE}}
+      - echo ""
+      - echo "=== ArgoCD Services ==="
+      - kubectl get svc -n {{.ARGOCD_NAMESPACE}}
+
+  cleanup:
+    desc: Delete KIND cluster
+    cmds:
+      - kind delete cluster --name {{.CLUSTER_NAME}}
+    preconditions:
+      - kind get clusters | grep -q {{.CLUSTER_NAME}}
+
+  destroy:
+    desc: Complete cleanup
+    cmds:
+      - task: cleanup
+      - echo "Cluster deleted"
