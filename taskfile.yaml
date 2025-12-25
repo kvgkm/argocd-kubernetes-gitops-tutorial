@@ -1,5 +1,7 @@
 version: '3'
 
+silent: true
+
 vars:
   CLUSTER_NAME: argocd-local
   ARGOCD_NAMESPACE: argocd
@@ -153,16 +155,10 @@ tasks:
       - task: install-argocd
       - echo "🎉 Setup complete! Run 'task port-forward' to access ArgoCD UI"
 
-  cleanup:
+  destroy:
     desc: 🧹 Delete KIND cluster
     cmds:
       - kind delete cluster --name {{.CLUSTER_NAME}}
       - echo "✅ Cluster deleted"
     preconditions:
       - kind get clusters | grep -q {{.CLUSTER_NAME}}
-
-  destroy:
-    desc: 💥 Complete cleanup
-    cmds:
-      - task: cleanup
-      - echo "🧹 All cleaned up"
