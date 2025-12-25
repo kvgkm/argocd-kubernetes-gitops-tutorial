@@ -4,12 +4,11 @@ vars:
   CLUSTER_NAME: argocd-local
   ARGOCD_NAMESPACE: argocd
   ARGOCD_VERSION: 7.7.0
-  KIND_VERSION: v1.27.3
+  DEMO_NAMESPACE: grade-demo
 
 tasks:
-
   create-cluster:
-    desc: Create KIND cluster with ingress support
+    desc: 🚀 Create KIND cluster with ingress support
     cmds:
       - |
         cat <<EOF | kind create cluster --name {{.CLUSTER_NAME}} --config=-
@@ -32,21 +31,23 @@ tasks:
             protocol: TCP
         EOF
       - kubectl cluster-info --context kind-{{.CLUSTER_NAME}}
+      - echo "✅ Cluster created successfully"
     status:
       - kind get clusters | grep -q {{.CLUSTER_NAME}}
 
   install-ingress:
-    desc: Install nginx ingress controller
+    desc: 🌐 Install nginx ingress controller
     deps: [create-cluster]
     cmds:
       - kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
       - sleep 10
       - kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=120s
+      - echo "✅ Ingress controller ready"
     status:
       - kubectl get namespace ingress-nginx &> /dev/null
 
   install-argocd:
-    desc: Install ArgoCD via Helm
+    desc: 🔄 Install ArgoCD via Helm
     deps: [create-cluster]
     cmds:
       - helm repo add argo https://argoproj.github.io/argo-helm
@@ -54,51 +55,114 @@ tasks:
       - kubectl create namespace {{.ARGOCD_NAMESPACE}} --dry-run=client -o yaml | kubectl apply -f -
       - helm upgrade --install argocd argo/argo-cd --namespace {{.ARGOCD_NAMESPACE}} --version {{.ARGOCD_VERSION}} --wait
       - kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n {{.ARGOCD_NAMESPACE}} --timeout=300s
+      - echo "✅ ArgoCD installed successfully"
     status:
       - helm list -n {{.ARGOCD_NAMESPACE}} | grep -q argocd
 
   get-password:
-    desc: Get ArgoCD admin password
+    desc: 🔑 Get ArgoCD admin password
     cmds:
+      - echo "Password:"
       - kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
 
   port-forward:
-    desc: Port-forward ArgoCD server to localhost:8080
+    desc: 🔌 Port-forward ArgoCD server to localhost:8080
     cmds:
-      - echo "ArgoCD UI available at https://localhost:8080"
-      - echo "Username -> admin"
-      - echo "Password -> $(kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)"
+      - echo "🌐 ArgoCD UI available at https://localhost:8080"
+      - echo "👤 Username-> admin"
+      - echo "🔑 Password-> $(kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)"
       - kubectl port-forward svc/argocd-server -n {{.ARGOCD_NAMESPACE}} 8080:443
 
+  deploy-basic-app:
+    desc: 📦 Deploy basic ArgoCD application
+    cmds:
+      - kubectl apply -f argocd/applications/basic-application.yaml
+      - echo "✅ Basic application deployed"
+
+  deploy-kustomize-app:
+    desc: 🛠️  Deploy kustomize ArgoCD application (dev)
+    cmds:
+      - kubectl apply -f argocd/applications/kustomize-application.yaml
+      - echo "✅ Kustomize dev application deployed"
+
+  deploy-kustomize-prod:
+    desc: 🏭 Deploy kustomize ArgoCD application (prod)
+    cmds:
+      - kubectl apply -f argocd/applications/kustomize-application-prod.yaml
+      - echo "✅ Kustomize prod application deployed"
+
+  deploy-helm-app:
+    desc: ⎈ Deploy helm ArgoCD application
+    cmds:
+      - kubectl apply -f argocd/applications/helm-application.yaml
+      - echo "✅ Helm application deployed"
+
+  deploy-apps:
+    desc: 🚢 Deploy all ArgoCD applications
+    cmds:
+      - task: deploy-basic-app
+      - task: deploy-kustomize-app
+      - task: deploy-kustomize-prod
+      - task: deploy-helm-app
+      - echo "🎉 All applications deployed"
+
+  status-demo:
+    desc: 📊 Check grade-demo namespace status
+    cmds:
+      - echo "📦 === Pods in {{.DEMO_NAMESPACE}} ==="
+      - kubectl get pods -n {{.DEMO_NAMESPACE}}
+      - echo ""
+      - echo "🚀 === Deployments in {{.DEMO_NAMESPACE}} ==="
+      - kubectl get deployments -n {{.DEMO_NAMESPACE}}
+      - echo ""
+      - echo "🌐 === Services in {{.DEMO_NAMESPACE}} ==="
+      - kubectl get services -n {{.DEMO_NAMESPACE}}
+
+  status:
+    desc: 📈 Check cluster and ArgoCD status
+    cmds:
+      - echo "☸️  === Cluster Status ==="
+      - kubectl cluster-info --context kind-{{.CLUSTER_NAME}}
+      - echo ""
+      - echo "📂 === All Namespaces ==="
+      - kubectl get namespaces
+      - echo ""
+      - echo "🔄 === ArgoCD Pods ==="
+      - kubectl get pods -n {{.ARGOCD_NAMESPACE}}
+      - echo ""
+      - echo "📋 === ArgoCD Applications ==="
+      - kubectl get applications -n {{.ARGOCD_NAMESPACE}}
+      - echo ""
+      - echo "⎈ === Helm Releases ==="
+      - helm list --all-namespaces
+
+  sync-apps:
+    desc: 🔄 Sync all ArgoCD applications
+    cmds:
+      - kubectl patch application basic-app -n {{.ARGOCD_NAMESPACE}} --type merge -p '{"operation":{"initiatedBy":{"username":"admin"},"sync":{"revision":"HEAD"}}}'
+      - kubectl patch application kustomize-app -n {{.ARGOCD_NAMESPACE}} --type merge -p '{"operation":{"initiatedBy":{"username":"admin"},"sync":{"revision":"HEAD"}}}'
+      - kubectl patch application kustomize-app-prod -n {{.ARGOCD_NAMESPACE}} --type merge -p '{"operation":{"initiatedBy":{"username":"admin"},"sync":{"revision":"HEAD"}}}'
+      - kubectl patch application helm-app -n {{.ARGOCD_NAMESPACE}} --type merge -p '{"operation":{"initiatedBy":{"username":"admin"},"sync":{"revision":"HEAD"}}}'
+      - echo "✅ All applications synced"
+
   deploy-all:
-    desc: Complete setup - cluster, ingress, and ArgoCD
+    desc: 🎯 Complete setup - cluster, ingress, and ArgoCD
     cmds:
       - task: create-cluster
       - task: install-ingress
       - task: install-argocd
-      - echo "Setup complete! Run 'task port-forward' to access ArgoCD UI"
-
-  status:
-    desc: Check cluster and ArgoCD status
-    cmds:
-      - echo "=== Cluster Status ==="
-      - kubectl cluster-info --context kind-{{.CLUSTER_NAME}}
-      - echo ""
-      - echo "=== ArgoCD Pods ==="
-      - kubectl get pods -n {{.ARGOCD_NAMESPACE}}
-      - echo ""
-      - echo "=== ArgoCD Services ==="
-      - kubectl get svc -n {{.ARGOCD_NAMESPACE}}
+      - echo "🎉 Setup complete! Run 'task port-forward' to access ArgoCD UI"
 
   cleanup:
-    desc: Delete KIND cluster
+    desc: 🧹 Delete KIND cluster
     cmds:
       - kind delete cluster --name {{.CLUSTER_NAME}}
+      - echo "✅ Cluster deleted"
     preconditions:
       - kind get clusters | grep -q {{.CLUSTER_NAME}}
 
   destroy:
-    desc: Complete cleanup
+    desc: 💥 Complete cleanup
     cmds:
       - task: cleanup
-      - echo "Cluster deleted"
+      - echo "🧹 All cleaned up"
